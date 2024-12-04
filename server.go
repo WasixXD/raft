@@ -17,6 +17,7 @@ type Server struct {
 	TermNumber   int
 	CurrentState State
 	Servers      []*rpc.Client
+	LastHear     time.Time
 }
 
 type Args struct{}
@@ -29,14 +30,17 @@ func (s *Server) GetId(args *Args, reply *ArgsReply) error {
 	return nil
 }
 
-func Register() {
-	err := rpc.Register(&Server{})
+func (s *Server) MainLoop() {
+	s.CurrentState = FOLLOWER
+	for {
+		s.LastHear = time.Now()
 
-	if err != nil {
-		log.Fatalln("Error on register: ", err)
-		return
+		time.Sleep(RandomTimeout())
+
+		result := time.Since(s.LastHear)
+		log.Println(result)
 	}
-	rpc.HandleHTTP()
+
 }
 
 func (s *Server) Start(id, port_start, n_server int) {
@@ -67,4 +71,5 @@ func (s *Server) Start(id, port_start, n_server int) {
 		s.Servers = append(s.Servers, client)
 	}
 	log.Printf("[%d] up and running\n", id)
+	s.MainLoop()
 }
