@@ -31,13 +31,14 @@ type VoteReply struct {
 
 type LeaderArgs struct {
 	LeaderId int
+	Term     int
 }
 
 type LeaderReply struct {
 }
 
 func RandomTimeout() time.Duration {
-	return time.Duration((rand.Intn(700-200) + 200)) * time.Millisecond
+	return time.Duration((rand.Intn(300-150) + 150)) * time.Millisecond
 
 }
 

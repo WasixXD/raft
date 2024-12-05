@@ -2,7 +2,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -22,18 +24,31 @@ type Server struct {
 	NeedsLeader  bool
 	LeaderIndex  int
 
-	mu   sync.Mutex
-	cond sync.Cond
+	mu sync.Mutex
+	c  chan bool
 }
 
 func (s *Server) Heartbeat(args *LeaderArgs, reply *LeaderReply) error {
+	// TODO: I THINK THE ERROR HAPPENS BECAUSE THE CHECK IF THE LEADER IS VALID JUST OCCURS IN THE HEARTBET,
+	// MAYBE, IF WE HAVE A MORE PRECISE WAY TO KNOW THIS WE CAN JUST GO TO A ELECTION RIGHT WAY
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// leader got out
+	if time.Since(s.LastHear) > 300*time.Millisecond || args.Term < s.TermNumber {
+		s.NeedsLeader = true
+		s.VotingFor = -1
+
+		time.Sleep(RandomTimeout())
+		go s.ElectionTimeout()
+		return fmt.Errorf("leader is unreachable")
+	}
+
+	s.CurrentState = FOLLOWER
 	s.NeedsLeader = false
 	s.LastHear = time.Now()
 	s.LeaderIndex = args.LeaderId
 	log.Printf("[%d/%s] Heartbeat received from: %d", s.Id, s.CurrentState, args.LeaderId)
-	s.CurrentState = FOLLOWER
 
 	return nil
 }
@@ -52,6 +67,10 @@ func (s *Server) RequestVote(args *Vote, reply *VoteReply) error {
 
 		// now we just follow the leader
 		s.CurrentState = FOLLOWER
+		s.TermNumber = args.CurrentTerm
+		s.NeedsLeader = false
+
+		s.LastHear = time.Now()
 		return nil
 	}
 
@@ -61,7 +80,11 @@ func (s *Server) RequestVote(args *Vote, reply *VoteReply) error {
 
 func (s *Server) ElectionTimeout() {
 	s.mu.Lock()
-
+	if !s.NeedsLeader {
+		s.mu.Unlock()
+		return
+	}
+	log.Printf("[%d] Participa da eleição", s.Id)
 	s.CurrentState = CANDIDATE
 	s.TermNumber++
 	s.VotingFor = s.Id
@@ -102,17 +125,41 @@ func (s *Server) ElectionTimeout() {
 
 func (s *Server) SendHeartbeat() {
 	s.mu.Lock()
-	log.Printf("[%d:%s] Sending Hearthbeat", s.Id, s.CurrentState)
+	log.Printf("[%d/%s] Sending Hearthbeat", s.Id, s.CurrentState)
 	my_id := s.Id
+	term := s.TermNumber
 	s.mu.Unlock()
+
+	errorChan := make(chan error, len(s.Servers))
+
 	for _, v := range s.Servers {
 		go func(c *rpc.Client) {
-			args := LeaderArgs{LeaderId: my_id}
+			args := LeaderArgs{LeaderId: my_id, Term: term}
 			reply := LeaderReply{}
-			c.Call("Server.Heartbeat", &args, &reply)
+			err := c.Call("Server.Heartbeat", &args, &reply)
+			errorChan <- err
 		}(v)
 	}
-	time.Sleep(time.Second)
+
+	for i := 0; i < len(s.Servers); i++ {
+		if err := <-errorChan; err != nil {
+			s.mu.Lock()
+			s.VotingFor = -1
+			s.NeedsLeader = true
+			s.mu.Unlock()
+			log.Printf("[%d] err: %s", s.Id, err)
+			time.Sleep(RandomTimeout())
+			go s.ElectionTimeout()
+			return
+		}
+	}
+
+	if rand.IntN(10) == 5 {
+		log.Println("Atraso de 1s")
+		time.Sleep(time.Second)
+	}
+
+	time.Sleep(100 * time.Millisecond)
 	go s.SendHeartbeat()
 }
 
@@ -129,10 +176,11 @@ func (s *Server) Start(id, port_start, n_server int) {
 
 	s.mu.Lock()
 	s.Id = id
-	s.cond = *sync.NewCond(&s.mu)
 	s.Servers = make(map[int]*rpc.Client)
+	s.c = make(chan bool)
 	s.VotingFor = -1
 	s.CurrentState = FOLLOWER
+	s.NeedsLeader = true
 	s.mu.Unlock()
 
 	sockname := masterSock(id)
@@ -173,4 +221,5 @@ func (s *Server) Start(id, port_start, n_server int) {
 	time.Sleep(RandomTimeout())
 
 	go s.ElectionTimeout()
+
 }
