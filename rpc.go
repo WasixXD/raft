@@ -1,9 +1,7 @@
 package main
 
 import (
-	"log"
 	"math/rand"
-	"net/rpc"
 	"os"
 	"strconv"
 	"time"
@@ -19,8 +17,27 @@ const (
 
 const UP_TIME = 1 * time.Millisecond
 
+type Vote struct {
+	VotingFor    int
+	CurrentState State
+	CurrentTerm  int
+	ServerId     int
+}
+
+type VoteReply struct {
+	From      int
+	VotingFor int
+}
+
+type LeaderArgs struct {
+	LeaderId int
+}
+
+type LeaderReply struct {
+}
+
 func RandomTimeout() time.Duration {
-	return time.Duration((rand.Intn(300-150) + 150)) * time.Millisecond
+	return time.Duration((rand.Intn(700-200) + 200)) * time.Millisecond
 
 }
 
@@ -29,14 +46,4 @@ func masterSock(id int) string {
 	s += strconv.Itoa(os.Getuid())
 	s += "-" + strconv.Itoa(id)
 	return s
-}
-
-func Register() {
-	err := rpc.Register(&Server{})
-
-	if err != nil {
-		log.Fatalln("Error on register: ", err)
-		return
-	}
-	rpc.HandleHTTP()
 }
