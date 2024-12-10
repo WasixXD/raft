@@ -2,18 +2,20 @@ package main
 
 import (
 	"fmt"
+	"net/rpc"
 )
 
-const port_start = 2000
-const n_server = 5
+type Args struct {
+}
+
+const NUM_SERVERS int = 3
+const PORT_START int = 2000
 
 func main() {
-
-	fmt.Println("================ RAFT ================")
-
-	for i := 0; i < n_server; i++ {
-		s := &Server{}
-		go s.Start(port_start+i, port_start, n_server)
+	for i := 0; i < NUM_SERVERS; i++ {
+		addr := fmt.Sprintf(":%d", PORT_START+i)
+		node := Node{Address: addr, peers: make(map[string]*rpc.Client)}
+		go node.Start(PORT_START, NUM_SERVERS)
 	}
 
 	select {}
