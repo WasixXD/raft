@@ -68,41 +68,49 @@ func (n *Node) ReceiveAppend(args *Log, reply *LogReply) error {
 	return nil
 }
 
+func (n *Node) Middleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		n.mu.Lock()
+		addr := n.leader
+		state := n.state
+		n.mu.Unlock()
+
+		if state != LEADER {
+
+			leaderPath := fmt.Sprintf("http://localhost%s%s", addr, req.URL)
+
+			proxyReq, err := http.NewRequest(req.Method, leaderPath, req.Body)
+			if err != nil {
+				log.Println("Could not reach leader: ", err)
+			}
+
+			proxyReq.Header = req.Header.Clone()
+
+			res, err := http.DefaultClient.Do(proxyReq)
+
+			if err != nil {
+				log.Println("Err on request: ", err)
+			}
+
+			defer res.Body.Close()
+			for key, values := range res.Header {
+				for _, value := range values {
+					w.Header().Add(key, value)
+				}
+			}
+			w.WriteHeader(res.StatusCode)
+			io.Copy(w, res.Body)
+
+			return
+		}
+		next(w, req)
+	}
+}
+
 func (n *Node) PutValue(w http.ResponseWriter, req *http.Request) {
 	n.mu.Lock()
-	addr := n.leader
-	state := n.state
 	a := n.Address
 	n.mu.Unlock()
-
-	if state != LEADER {
-
-		leaderPath := fmt.Sprintf("http://localhost%s%s", addr, req.URL)
-
-		proxyReq, err := http.NewRequest(req.Method, leaderPath, req.Body)
-		if err != nil {
-			log.Println("Could not reach leader: ", err)
-		}
-
-		proxyReq.Header = req.Header.Clone()
-
-		res, err := http.DefaultClient.Do(proxyReq)
-
-		if err != nil {
-			log.Println("Err on request: ", err)
-		}
-
-		defer res.Body.Close()
-		for key, values := range res.Header {
-			for _, value := range values {
-				w.Header().Add(key, value)
-			}
-		}
-		w.WriteHeader(res.StatusCode)
-		io.Copy(w, res.Body)
-
-		return
-	}
 
 	fmt.Printf("Leader recebeu\n")
 	body, _ := io.ReadAll(req.Body)
@@ -114,6 +122,7 @@ func (n *Node) PutValue(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprintf(w, "OK\n")
 		return
 	}
+
 	log.Printf("[%s] Something went wrong on commiting", a)
 	fmt.Fprintf(w, "Something went Wrong\n")
 }
@@ -165,12 +174,12 @@ func (n *Node) ReceiveHeartbeat(args *Heart, reply *HeartReply) error {
 		n.state = FOLLOWER
 		n.leader = args.Leader
 		reply.Ok = true
-	} else {
-		// log.Printf("[%s] corno está tentando me golpear, LEADER: %s | TERM: %d | MYTERM: %d", n.Address, args.Leader, args.Term, n.TermNumber)
-		n.NeedsLeader = true
-		n.Voted = false
-		reply.Ok = false
+		return nil
 	}
+
+	n.NeedsLeader = true
+	n.Voted = false
+	reply.Ok = false
 
 	return nil
 }
@@ -294,7 +303,7 @@ func (n *Node) Start(portStart, numServers int) {
 	// new Http Multiplexer -> Telling go to let us do the way we want
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/put", n.PutValue)
+	mux.HandleFunc("/put", n.Middleware(n.PutValue))
 
 	rpcServer := rpc.NewServer()
 	err := rpcServer.Register(n)
